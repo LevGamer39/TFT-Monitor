@@ -1,0 +1,4 @@
+Pillow
+psutil
+spidev
+lgpio

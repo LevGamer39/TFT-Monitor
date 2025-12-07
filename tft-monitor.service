@@ -1,0 +1,13 @@
+[Unit]
+Description=TFT System Monitor
+After=multi-user.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/tftmonitor/tft_monitor.py
+WorkingDirectory=/opt/tftmonitor
+StandardOutput=journal
+Restart=always
+User=root 
+
+[Install]
+WantedBy=multi-user.target

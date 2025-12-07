@@ -1,0 +1,15 @@
+[Unit]
+Description=TFT shutdown message
+DefaultDependencies=no
+Before=poweroff.target halt.target
+Conflicts=reboot.target
+After=tft-monitor.service 
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/tftmonitor
+ExecStart=/usr/bin/python3 /opt/tftmonitor/tft_shutdown.py poweroff
+TimeoutSec=5
+
+[Install]
+WantedBy=poweroff.target halt.target
