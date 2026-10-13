@@ -2,3 +2,4 @@ Pillow
 psutil
 spidev
 lgpio
+numpy

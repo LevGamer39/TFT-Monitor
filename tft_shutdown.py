@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 TFT Shutdown/Reboot Message Handler
-Отображает сообщения о выключении/перезагрузке.
+Отображает сообщения о выключении/перезагрузке на дисплее ST7789.
 """
 
 import sys

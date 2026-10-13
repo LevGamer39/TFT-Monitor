@@ -7,8 +7,8 @@ TFT System Monitor
 import sys
 import time
 import os
-import socket
 import psutil
+import numpy as np
 from collections import deque
 from PIL import Image, ImageDraw, ImageFont
 import spidev
@@ -84,23 +84,27 @@ class ST7789Display:
     def display(self, image):
         if image.width != self.width or image.height != self.height:
             image = image.resize((self.width, self.height))
-        
-        img_rgb = image.convert("RGB")
-        r, g, b = img_rgb.split()
-        r_d, g_d, b_d = r.tobytes(), g.tobytes(), b.tobytes()
-        
-        rgb565 = bytearray(self.width * self.height * 2)
-        for i in range(len(r_d)):
-            val = ((r_d[i] & 0xF8) << 8) | ((g_d[i] & 0xFC) << 3) | (b_d[i] >> 3)
-            rgb565[i*2] = val >> 8
-            rgb565[i*2+1] = val & 0xFF
+
+        pixels = np.asarray(image.convert("RGB"), dtype=np.uint8)
+
+        r = pixels[:, :, 0].astype(np.uint16)
+        g = pixels[:, :, 1].astype(np.uint16)
+        b = pixels[:, :, 2].astype(np.uint16)
+
+        rgb565 = (
+            ((r & 0xF8) << 8)
+            | ((g & 0xFC) << 3)
+            | (b >> 3)
+        )
+
+        rgb565 = rgb565.astype(">u2").tobytes()
 
         self.set_window(0, 0, self.width, self.height)
         lgpio.gpio_write(self.h, self.config.PIN_DC, 1)
         
         chunk = 4096
         for i in range(0, len(rgb565), chunk):
-            self.spi.xfer2(rgb565[i:i+chunk])
+            self.spi.xfer2(rgb565[i:i + chunk])
 
     def set_window(self, x, y, w, h):
         self.write_cmd(0x2A); self.write_data([x >> 8, x & 0xFF, (x + w - 1) >> 8, (x + w - 1) & 0xFF])
@@ -119,39 +123,71 @@ class SystemMonitor:
     def __init__(self):
         self.last_net = psutil.net_io_counters()
         self.last_time = time.time()
+
+        self.cached_ip = None
+        self.last_ip_update = 0.0
+
+        self.cached_disk = psutil.disk_usage("/")
+        self.last_disk_update = 0.0
         
     def get_ip(self):
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]; s.close()
-            return ip
-        except: return "No IP"
+            with open("/proc/net/route") as f:
+                for line in f.readlines()[1:]:
+                    fields = line.split()
+
+                    if len(fields) < 3:
+                        continue
+
+                    interface = fields[0]
+                    destination = fields[1]
+                    flags = int(fields[3], 16)
+
+                    if destination == "00000000" and flags & 0x1:
+                        for address in psutil.net_if_addrs().get(interface, []):
+                            if address.family == 2:
+                                return address.address
+        except (OSError, ValueError):
+            pass
+
+        return "No IP"
 
     def get_data(self):
+        now = time.time()
+
         cpu = psutil.cpu_percent(interval=None)
         cpu_cores = psutil.cpu_percent(interval=None, percpu=True)
         
         try:
             with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
                 temp = int(f.read()) / 1000.0
-        except: temp = 0.0
+        except:
+            temp = 0.0
 
         mem = psutil.virtual_memory()
-        disk = psutil.disk_usage('/')
+
+        if now - self.last_disk_update >= 5.0:
+            self.cached_disk = psutil.disk_usage("/")
+            self.last_disk_update = now
+
+        disk = self.cached_disk
         
         net = psutil.net_io_counters()
-        now = time.time()
         dt = now - self.last_time
         tx = (net.bytes_sent - self.last_net.bytes_sent) / dt
         rx = (net.bytes_recv - self.last_net.bytes_recv) / dt
-        self.last_net = net; self.last_time = now
+        self.last_net = net
+        self.last_time = now
+
+        if now - self.last_ip_update >= 30.0 or self.cached_ip is None:
+            self.cached_ip = self.get_ip()
+            self.last_ip_update = now
 
         return {
             "cpu": cpu, "cpu_cores": cpu_cores, "temp": temp,
             "mem_p": mem.percent, "mem_u": mem.used/1024**3, "mem_t": mem.total/1024**3,
             "disk_free": disk.free/1024**3,
-            "net_tx": tx, "net_rx": rx, "ip": self.get_ip()
+            "net_tx": tx, "net_rx": rx, "ip": self.cached_ip
         }
 
 class Dashboard:
